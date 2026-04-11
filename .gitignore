@@ -51,6 +51,18 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Node.js / Frontend
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env*
+.DS_Store
+Thumbs.db
+
 # Translations
 *.mo
 *.pot
