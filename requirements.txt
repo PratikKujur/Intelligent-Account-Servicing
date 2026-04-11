@@ -22,3 +22,5 @@ sqlite-vec
 fastapi[standard]
 gradio
 python-dotenv
+pytesseract
+psycopg2-binary

@@ -1,0 +1,89 @@
+[
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "REQUEST_RECEIVED",
+    "event_data": {
+      "customer_id": "CUST-082EFF64",
+      "old_name": "John Kujur",
+      "new_name": "John Doe",
+      "date_of_birth": "01-01-2001",
+      "has_document": true
+    },
+    "timestamp": "2026-04-11T19:01:49.069227"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "VALIDATION_COMPLETED",
+    "event_data": {
+      "status": "VALID",
+      "message": "The identity verification request is valid. The old and new names are valid, of reasonable length, and different from each other."
+    },
+    "timestamp": "2026-04-11T19:01:50.360760"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "OCR_COMPLETED",
+    "event_data": {
+      "success": true,
+      "text_length": 59,
+      "text_preview": "Government of India\nJohn Doe\n01/01/2001\nMale\n1234 5678 9101"
+    },
+    "timestamp": "2026-04-11T19:01:51.013083"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "EXTRACTION_COMPLETED",
+    "event_data": {
+      "extracted_fields": {
+        "name": "John Doe",
+        "date_of_birth": "01/01/2001",
+        "aadhar_number": "1234 5678 9101",
+        "raw_text": "Government of India\nJohn Doe\n01/01/2001\nMale\n1234 5678 9101",
+        "forgery_flag": false,
+        "document_authentic": true
+      },
+      "forgery_flag": false
+    },
+    "timestamp": "2026-04-11T19:01:51.022090"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "SCORING_COMPLETED",
+    "event_data": {
+      "ai_score": 79,
+      "name_match": null,
+      "doc_auth": 70,
+      "recommendation": "APPROVE_WITH_CAUTION"
+    },
+    "timestamp": "2026-04-11T19:01:51.599453"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "PIPELINE_COMPLETED",
+    "event_data": {
+      "status": "AI_VERIFIED_PENDING_HUMAN",
+      "recommendation": "APPROVE_WITH_CAUTION",
+      "confidence": 79
+    },
+    "timestamp": "2026-04-11T19:01:53.988543"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "CHECKER_DECISION",
+    "event_data": {
+      "checker_decision": "APPROVE",
+      "checker_id": "CHECKER-001",
+      "rejection_reason": null
+    },
+    "timestamp": "2026-04-11T19:02:24.696714"
+  },
+  {
+    "request_id": "b3fa1d28-2bd7-4d09-9b31-67bc878691f6",
+    "event_type": "RPS_UPDATE",
+    "event_data": {
+      "success": true,
+      "rps_reference": "RPS-23DBDF779CE4"
+    },
+    "timestamp": "2026-04-11T19:02:24.706277"
+  }
+]
