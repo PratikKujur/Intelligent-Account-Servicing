@@ -1,5 +1,6 @@
 """
 API routes for IASW workflow.
+Defines all REST endpoints for request submission, retrieval, and checker decisions.
 """
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import Optional
@@ -16,9 +17,12 @@ from backend.services.rps_mock import get_rps_service
 from backend.services.ai_pipeline import get_ai_pipeline
 
 
+# Create router with /api/v1 prefix
 router = APIRouter(prefix="/api/v1", tags=["IASW Workflow"])
 
 
+# Submit a new name change request
+# Accepts form data + optional document upload
 @router.post("/requests/submit")
 async def submit_request(
     customer_id: Optional[str] = Form(None),
@@ -38,12 +42,15 @@ async def submit_request(
     """
     document_base64 = None
     
+    # Convert uploaded file to base64 for processing
     if document:
         content = await document.read()
         import base64
         document_base64 = base64.b64encode(content).decode()
     
+    # Get AI pipeline and process request
     pipeline = get_ai_pipeline()
+    # Generate customer ID if not provided
     generated_customer_id = customer_id or f"CUST-{uuid.uuid4().hex[:8].upper()}"
     result = pipeline.process_request(
         customer_id=generated_customer_id,
@@ -54,6 +61,7 @@ async def submit_request(
         document_base64=document_base64
     )
     
+    # If processing failed (validation error), return 400
     if result.get("status") == RequestStatus.FAILED.value:
         raise HTTPException(status_code=400, detail=result.get("error"))
     
@@ -67,6 +75,7 @@ async def submit_request(
     }
 
 
+# Get a specific request by ID
 @router.get("/requests/{request_id}")
 async def get_request(request_id: str):
     """Get request details by ID"""
@@ -75,6 +84,7 @@ async def get_request(request_id: str):
     if not request_data:
         raise HTTPException(status_code=404, detail="Request not found")
     
+    # Parse JSON fields back to dict (stored as JSON strings in SQLite)
     if request_data.get("extracted_data"):
         request_data["extracted_data"] = json.loads(request_data["extracted_data"])
     if request_data.get("confidence_score"):
@@ -95,6 +105,7 @@ async def get_request(request_id: str):
     }
 
 
+# List all requests, optionally filtered by status
 @router.get("/requests")
 async def list_requests(status: Optional[str] = None):
     """List all requests, optionally filtered by status"""
@@ -106,6 +117,7 @@ async def list_requests(status: Optional[str] = None):
             "request_id": req["request_id"],
             "customer_id": req["customer_id"],
             "name": req["old_name"],
+            # Parse JSON strings back to dicts
             "extracted_data": json.loads(req["extracted_data"]) if req.get("extracted_data") else None,
             "confidence_score": json.loads(req["confidence_score"]) if req.get("confidence_score") else None,
             "ai_summary": req.get("ai_summary"),
@@ -124,22 +136,27 @@ async def list_requests(status: Optional[str] = None):
     }
 
 
+# Get all requests pending human review
 @router.get("/requests/pending/review")
 async def get_pending_requests():
     """Get all requests pending human review"""
     return await list_requests(status=RequestStatus.AI_VERIFIED_PENDING_HUMAN.value)
 
 
+# Submit checker decision (APPROVE/REJECT)
+# This is the HITL boundary - requires checker_id
 @router.post("/checker/decide")
 async def checker_decision(decision: CheckerDecision):
     """
     Submit checker decision (HITL boundary).
+    Requires checker_id to authorize RPS updates.
     """
     request_data = RequestRepository.get_request(decision.request_id)
     
     if not request_data:
         raise HTTPException(status_code=404, detail="Request not found")
     
+    # Validate request is in a decidable state
     if request_data["status"] not in [
         RequestStatus.AI_VERIFIED_PENDING_HUMAN.value,
         RequestStatus.APPROVED.value,
@@ -150,6 +167,7 @@ async def checker_decision(decision: CheckerDecision):
             detail=f"Request cannot be decided in status: {request_data['status']}"
         )
     
+    # Log checker decision for audit
     AuditService.log_checker_decision(
         decision.request_id,
         decision.decision.value,
@@ -157,24 +175,28 @@ async def checker_decision(decision: CheckerDecision):
         decision.rejection_reason
     )
     
+    # If approved, trigger RPS update (with HITL enforcement)
     if decision.decision.value == "APPROVE":
         rps_service = get_rps_service()
         
         try:
+            # Call RPS mock - will raise PermissionError if no checker_id
             rps_result = rps_service.update_customer_name(
                 request_id=decision.request_id,
                 customer_id=request_data["customer_id"],
                 old_name=request_data["old_name"],
                 new_name=request_data["new_name"],
-                checker_id=decision.checker_id
+                checker_id=decision.checker_id  # This enforces HITL
             )
             
+            # Log successful RPS update
             AuditService.log_rps_update(
                 decision.request_id,
                 success=True,
                 rps_reference=rps_result.get("rps_reference")
             )
             
+            # Record RPS update in database
             RequestRepository.add_rps_update(
                 request_id=decision.request_id,
                 rps_reference=rps_result.get("rps_reference") or "",
@@ -182,6 +204,7 @@ async def checker_decision(decision: CheckerDecision):
                 status="COMPLETED"
             )
             
+            # Update request status to RPS_UPDATED
             RequestRepository.update_request(
                 request_id=decision.request_id,
                 status=RequestStatus.RPS_UPDATED.value,
@@ -199,11 +222,13 @@ async def checker_decision(decision: CheckerDecision):
             }
             
         except PermissionError as e:
+            # HITL violation - should never happen if frontend validates
             raise HTTPException(status_code=403, detail=str(e))
         except Exception as e:
             AuditService.log_rps_update(decision.request_id, success=False)
             raise HTTPException(status_code=500, detail=f"RPS update failed: {str(e)}")
     
+    # If rejected, update status to REJECTED
     else:
         RequestRepository.update_request(
             request_id=decision.request_id,
@@ -222,6 +247,7 @@ async def checker_decision(decision: CheckerDecision):
         }
 
 
+# Get complete audit trail for a request
 @router.get("/audit/{request_id}")
 async def get_audit_logs(request_id: str):
     """Get audit trail for a request"""
@@ -233,6 +259,7 @@ async def get_audit_logs(request_id: str):
             "log_id": log["log_id"],
             "request_id": log["request_id"],
             "event_type": log["event_type"],
+            # Parse JSON event_data back to dict
             "event_data": json.loads(log["event_data"]) if log.get("event_data") else {},
             "timestamp": log["timestamp"]
         })
@@ -243,6 +270,7 @@ async def get_audit_logs(request_id: str):
     }
 
 
+# Health check endpoint for monitoring
 @router.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -253,6 +281,7 @@ async def health_check():
     }
 
 
+# Get RPS updates (banking system updates)
 @router.get("/rps/updates")
 async def get_rps_updates(request_id: Optional[str] = None):
     """Get RPS update audit trail"""
@@ -265,6 +294,7 @@ async def get_rps_updates(request_id: Optional[str] = None):
     }
 
 
+# Get RPS history for a specific customer
 @router.get("/rps/customer/{customer_id}")
 async def get_customer_rps_history(customer_id: str):
     """Get RPS history for a specific customer"""

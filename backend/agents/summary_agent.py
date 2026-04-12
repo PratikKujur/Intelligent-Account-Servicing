@@ -1,5 +1,6 @@
 """
 Summary Agent - LLM-powered summary generation using LangChain + Groq.
+Generates human-readable compliance summaries for human checkers.
 """
 import os
 from typing import Dict, Any, Optional
@@ -8,6 +9,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 
+# Prompt for generating compliance summaries
+# Key insight: Aadhaar shows CURRENT name (matches NEW), not OLD name
+# This is the expected pattern for valid name change requests
 SUMMARY_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a compliance officer reviewing NAME CHANGE REQUESTS for Aadhaar cards.
 
@@ -97,6 +101,8 @@ Generate verification summary.""")
 ])
 
 
+# Summary Agent - generates human-readable compliance summaries
+# Used by human checkers to make final decisions
 class SummaryAgent:
     """
     LLM-powered summary generation with fallback to rules.
@@ -110,6 +116,7 @@ class SummaryAgent:
         self._chain = None
         self._init_llm()
     
+    # Initialize LLM chain
     def _init_llm(self):
         if not self.groq_api_key:
             return
@@ -117,12 +124,14 @@ class SummaryAgent:
             self._llm = ChatGroq(
                 api_key=self.groq_api_key,
                 model=self.TEXT_MODEL,
-                temperature=0.3,
+                temperature=0.3,  # Slightly higher for more natural output
             )
             self._chain = SUMMARY_PROMPT | self._llm | StrOutputParser()
         except Exception as e:
             print(f"LLM init failed: {e}")
     
+    # Main entry point - generates summary
+    # Tries LLM first, falls back to rule-based template
     def generate_summary(
         self,
         extracted_data: Dict[str, Any],
@@ -142,6 +151,7 @@ class SummaryAgent:
             old_name, new_name, requested_dob, recommendation
         )
     
+    # LLM-based summary generation
     def _llm_generate_summary(
         self,
         extracted_data: Dict[str, Any],
@@ -171,6 +181,7 @@ class SummaryAgent:
                 old_name, new_name, requested_dob, "MANUAL_REVIEW"
             )
     
+    # Format extracted data for LLM prompt
     def _format_data(self, data: Dict[str, Any]) -> str:
         fields = [
             ('name', 'Name'),
@@ -182,6 +193,8 @@ class SummaryAgent:
             lines.append("- FORGERY FLAG DETECTED")
         return "\n".join(lines) if lines else "Limited data extracted"
     
+    # Rule-based summary (fallback when LLM unavailable)
+    # Generates a structured text summary
     def _rule_based_summary(
         self,
         extracted_data: Dict[str, Any],
@@ -235,5 +248,6 @@ class SummaryAgent:
         return "\n".join(lines)
 
 
+# Factory function
 def get_summary_agent(groq_api_key: Optional[str] = None) -> SummaryAgent:
     return SummaryAgent(groq_api_key)

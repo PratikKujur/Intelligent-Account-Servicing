@@ -1,6 +1,7 @@
 """
 Document Processor - LLM-powered extraction using LangChain + Groq.
 Supports both OCR (via pytesseract) and Vision models for direct image processing.
+Extracts structured data (name, DOB, Aadhaar) from identity documents.
 """
 
 import base64
@@ -19,6 +20,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
 
+# Pydantic schema for LLM output parsing
 class DocumentData(BaseModel):
     name: Optional[str] = Field(description="Full legal name as shown on document")
     date_of_birth: Optional[str] = Field(
@@ -31,6 +33,7 @@ class DocumentData(BaseModel):
     )
 
 
+# Dataclass for extraction results (used throughout pipeline)
 @dataclass
 class ExtractionResult:
     name: Optional[str]
@@ -41,6 +44,7 @@ class ExtractionResult:
     document_authentic: bool = True
 
 
+# LLM prompt for extracting data from OCR text
 EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -62,6 +66,7 @@ If a field cannot be found, use null. Be precise with Aadhaar numbers.""",
 )
 
 
+# LLM prompt for Vision model - directly analyzes image without OCR
 VISION_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -84,14 +89,19 @@ Look carefully for signs of tampering, poor image quality, or inconsistency. Ret
 ])
 
 
+# Document Processor - extracts structured data from identity documents
+# Processing hierarchy:
+# 1. Vision LLM (best) - directly analyzes image
+# 2. OCR + LLM - extracts text then LLM parses
+# 3. OCR + Regex (fallback) - basic pattern matching
 class DocumentProcessor:
     """
     Processes identity documents using Vision LLM or OCR-based extraction.
     Prefers vision models for direct image processing, falls back to OCR.
     """
 
-    VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
-    TEXT_MODEL = "llama-3.3-70b-versatile"
+    VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"  # Vision-capable model
+    TEXT_MODEL = "llama-3.3-70b-versatile"  # Text-only model
 
     def __init__(self, groq_api_key: Optional[str] = None):
         self.groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY")
@@ -101,10 +111,12 @@ class DocumentProcessor:
         self._vision_chain = None
         self._init_llm()
 
+    # Initialize both text and vision LLM chains
     def _init_llm(self):
         if not self.groq_api_key:
             return
         try:
+            # Text extraction chain: OCR text -> LLM -> structured JSON
             self._llm = ChatGroq(
                 api_key=self.groq_api_key,
                 model=self.TEXT_MODEL,
@@ -112,6 +124,7 @@ class DocumentProcessor:
             )
             self._chain = EXTRACTION_PROMPT | self._llm | self._parser
             
+            # Vision chain: Image -> Vision LLM -> structured JSON (no OCR needed)
             self._vision_llm = ChatGroq(
                 api_key=self.groq_api_key,
                 model=self.VISION_MODEL,
@@ -121,6 +134,8 @@ class DocumentProcessor:
         except Exception as e:
             print(f"LLM init failed: {e}")
 
+    # Main entry point - processes document and returns extraction result
+    # Tries Vision -> OCR+LLM -> OCR+Regex in order of preference
     def process_document(
         self,
         document_data: Optional[str] = None,
@@ -130,6 +145,7 @@ class DocumentProcessor:
         image_data = None
         raw_text = None
         
+        # Load document from various sources
         if document_path and os.path.exists(document_path):
             image_data = self._read_file_as_base64(document_path)
             raw_text = self._extract_text_from_image_path(document_path)
@@ -138,23 +154,29 @@ class DocumentProcessor:
             raw_text = self._extract_text_from_bytes(file_content)
         elif document_data:
             try:
+                # Try to decode as base64 image
                 decoded = base64.b64decode(document_data)
                 image_data = document_data
                 raw_text = self._extract_text_from_bytes(decoded)
             except Exception:
+                # Treat as raw text if not valid base64
                 raw_text = document_data
 
+        # Try Vision LLM first (best quality)
         if self._vision_chain and self.groq_api_key and image_data:
             return self._vision_extract(image_data)
         
+        # Try OCR + LLM extraction
         if self._chain and self.groq_api_key and raw_text:
             return self._llm_extract(raw_text)
         
+        # Last resort: regex-based extraction
         if raw_text:
             return self._regex_extract(raw_text)
         
         raise ValueError("Unable to read document: No valid document provided or document could not be processed")
 
+    # Read file and convert to base64
     def _read_file_as_base64(self, file_path: str) -> Optional[str]:
         try:
             with open(file_path, "rb") as f:
@@ -162,12 +184,14 @@ class DocumentProcessor:
         except Exception:
             return None
 
+    # OCR using pytesseract on image file
     def _extract_text_from_image_path(self, file_path: str) -> Optional[str]:
         try:
             return pytesseract.image_to_string(Image.open(file_path))
         except Exception:
             return None
 
+    # OCR using pytesseract on image bytes
     def _extract_text_from_bytes(self, content: bytes) -> Optional[str]:
         try:
             image = Image.open(io.BytesIO(content))
@@ -175,6 +199,7 @@ class DocumentProcessor:
         except Exception:
             return None
 
+    # PDF text extraction (for multi-page documents)
     def _extract_pdf(self, file_path: str) -> str:
         try:
             reader = PdfReader(file_path)
@@ -182,6 +207,7 @@ class DocumentProcessor:
         except Exception:
             raise ValueError(f"Unable to read PDF file: {file_path}")
 
+    # LLM-based extraction from OCR text
     def _llm_extract(self, raw_text: str) -> Tuple[bool, ExtractionResult]:
         try:
             result = self._chain.invoke({"document_text": raw_text})
@@ -197,6 +223,7 @@ class DocumentProcessor:
             print(f"LLM extract failed: {e}")
             return self._regex_extract(raw_text)
 
+    # Vision LLM extraction - directly analyzes image
     def _vision_extract(self, image_data: str) -> Tuple[bool, ExtractionResult]:
         try:
             result = self._vision_chain.invoke({"image_data": image_data})
@@ -212,6 +239,8 @@ class DocumentProcessor:
             print(f"Vision extract failed: {e}")
             raise ValueError(f"Unable to process document image: {str(e)}")
 
+    # Regex-based extraction fallback
+    # Uses pattern matching to find name, DOB, and Aadhaar
     def _regex_extract(self, raw_text: str) -> Tuple[bool, ExtractionResult]:
         name = self._extract_name(raw_text)
         dob = self._extract_dob(raw_text)
@@ -226,6 +255,7 @@ class DocumentProcessor:
             document_authentic=not self._detect_forgery(raw_text),
         )
 
+    # Extract name using regex patterns
     def _extract_name(self, text: str) -> Optional[str]:
         patterns = [
             r"(?:Name|Beneficiary|Holder)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
@@ -237,6 +267,7 @@ class DocumentProcessor:
                 return match.group(1).strip()
         return None
 
+    # Extract date of birth using regex patterns
     def _extract_dob(self, text: str) -> Optional[str]:
         patterns = [
             r"(?:DOB|Date of Birth|D\.O\.B)[:\s]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
@@ -248,6 +279,7 @@ class DocumentProcessor:
                 return match.group(1).strip()
         return None
 
+    # Extract Aadhaar number using regex patterns
     def _extract_adhar(self, text: str) -> Optional[str]:
         patterns = [
             r"(?:Aadhaar|Aadhar|Adhar)[:\s]*(?:No\.?)?[:\s]*(\d{4}\s?\d{4}\s?\d{4})",
@@ -261,11 +293,13 @@ class DocumentProcessor:
                     return f"{adhar[:4]} {adhar[4:8]} {adhar[8:12]}"
         return None
 
+    # Basic forgery detection - flags suspicious keywords
     def _detect_forgery(self, text: str) -> bool:
         suspicious = ["copy", "duplicate", "fake", "forged", "tampered"]
         text_lower = text.lower()
         return any(word in text_lower for word in suspicious)
 
 
+# Factory function
 def get_document_processor(groq_api_key: Optional[str] = None) -> DocumentProcessor:
     return DocumentProcessor(groq_api_key)
