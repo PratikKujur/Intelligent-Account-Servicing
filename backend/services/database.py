@@ -1,20 +1,42 @@
-# SQLite for local database storage
-import sqlite3
+# Database abstraction layer - supports both SQLite and PostgreSQL
+# Use DATABASE_URL env var to switch between databases:
+#   - SQLite: DATABASE_URL not set (default)
+#   - PostgreSQL: DATABASE_URL=postgresql://user:pass@host:5432/dbname
+
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 import os
 
-# Database file path: data/banking_system.db
+# Import database drivers
+import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# Database configuration
 DATABASE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "banking_system.db")
 
 
-# Create database connection with Row factory for dict-like access
+def _get_db_config():
+    """Get database configuration from environment (lazy evaluation)."""
+    return os.getenv("DATABASE_URL"), bool(os.getenv("DATABASE_URL"))
+
+
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row  # Allows accessing columns by name
-    return conn
+    DATABASE_URL, use_postgres = _get_db_config()
+    
+    if use_postgres and DATABASE_URL:
+        print(f"Connecting to PostgreSQL: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'localhost'}")
+        # Use RealDictCursor to return dict-like rows
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn.autocommit = False
+        return conn
+    else:
+        print(f"Connecting to SQLite: {DATABASE_PATH}")
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 # Context manager for database connections - ensures proper commit/rollback
@@ -23,12 +45,12 @@ def get_db():
     conn = get_db_connection()
     try:
         yield conn
-        conn.commit()  # Commit transaction on success
+        conn.commit()
     except Exception:
-        conn.rollback()  # Rollback on any error
+        conn.rollback()
         raise
     finally:
-        conn.close()  # Always close connection
+        conn.close()
 
 
 # Helper to get current timestamp in ISO format
@@ -36,82 +58,128 @@ def utcnow():
     return datetime.utcnow().isoformat()
 
 
-# Initialize database schema - creates tables if they don't exist
-# Called on application startup via lifespan handler
+# Initialize database schema
 def init_db():
+    _, use_postgres = _get_db_config()
+    if use_postgres:
+        _init_postgres()
+    else:
+        _init_sqlite()
+
+
+def _init_sqlite():
     os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
     
     with get_db() as conn:
         cursor = conn.cursor()
         
-        # Main table for storing name change requests
-        # Stores customer info, extracted data, scores, and status
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS pending_requests (
                 request_id TEXT PRIMARY KEY,
                 customer_id TEXT NOT NULL,
                 old_name TEXT NOT NULL,
                 new_name TEXT NOT NULL,
-                extracted_data TEXT,              -- JSON: Data extracted from document
-                confidence_score TEXT,             -- JSON: AI confidence scores
-                ai_summary TEXT,                   -- AI-generated compliance summary
-                ai_recommendation TEXT,            -- APPROVE/REJECT from AI
-                status TEXT NOT NULL,             -- Current request status
-                checker_decision TEXT,             -- Human checker decision
-                checker_id TEXT,                   -- Who reviewed the request
-                rejection_reason TEXT,             -- Reason if rejected
-                rps_reference TEXT,               -- Banking system reference
+                extracted_data TEXT,
+                confidence_score TEXT,
+                ai_summary TEXT,
+                ai_recommendation TEXT,
+                status TEXT NOT NULL,
+                checker_decision TEXT,
+                checker_id TEXT,
+                rejection_reason TEXT,
+                rps_reference TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
         
-        # Audit log table - tracks all events for compliance
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS audit_logs (
                 log_id TEXT PRIMARY KEY,
                 request_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,         -- Event type (e.g., "VALIDATION_COMPLETED")
-                event_data TEXT NOT NULL,          -- JSON: Event details
+                event_type TEXT NOT NULL,
+                event_data TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (request_id) REFERENCES pending_requests(request_id)
             )
         """)
         
-        # RPS updates table - records all banking system updates
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS rps_updates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id TEXT NOT NULL,
-                rps_reference TEXT,               -- Reference from banking system
-                updated_fields TEXT,               -- JSON: What was updated
-                status TEXT,                       -- Update status
+                rps_reference TEXT,
+                updated_fields TEXT,
+                status TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (request_id) REFERENCES pending_requests(request_id)
             )
         """)
         
-        # Index on status for efficient filtering (e.g., get pending reviews)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON pending_requests(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_created ON pending_requests(created_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_request ON audit_logs(request_id)")
+
+
+def _init_postgres():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_requests_status 
-            ON pending_requests(status)
+            CREATE TABLE IF NOT EXISTS pending_requests (
+                request_id VARCHAR(255) PRIMARY KEY,
+                customer_id VARCHAR(255) NOT NULL,
+                old_name VARCHAR(255) NOT NULL,
+                new_name VARCHAR(255) NOT NULL,
+                extracted_data TEXT,
+                confidence_score TEXT,
+                ai_summary TEXT,
+                ai_recommendation VARCHAR(50),
+                status VARCHAR(50) NOT NULL,
+                checker_decision VARCHAR(50),
+                checker_id VARCHAR(255),
+                rejection_reason TEXT,
+                rps_reference VARCHAR(255),
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
         """)
         
-        # Index on creation time for sorting
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_requests_created 
-            ON pending_requests(created_at)
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                log_id VARCHAR(255) PRIMARY KEY,
+                request_id VARCHAR(255) NOT NULL,
+                event_type VARCHAR(100) NOT NULL,
+                event_data TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                FOREIGN KEY (request_id) REFERENCES pending_requests(request_id)
+            )
         """)
         
-        # Index on request_id for efficient audit log lookups
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_audit_request 
-            ON audit_logs(request_id)
+            CREATE TABLE IF NOT EXISTS rps_updates (
+                id SERIAL PRIMARY KEY,
+                request_id VARCHAR(255) NOT NULL,
+                rps_reference VARCHAR(255),
+                updated_fields TEXT,
+                status VARCHAR(50),
+                created_at TIMESTAMP NOT NULL,
+                FOREIGN KEY (request_id) REFERENCES pending_requests(request_id)
+            )
         """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON pending_requests(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_requests_created ON pending_requests(created_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_request ON audit_logs(request_id)")
+
+
+def _row_to_dict(row) -> Dict[str, Any]:
+    """Convert row to dictionary."""
+    # Both SQLite (with row_factory) and PostgreSQL (with RealDictCursor) return dict-like rows
+    return dict(row)
 
 
 # Repository class for pending_requests table operations
-# Provides CRUD operations for name change requests
 class RequestRepository:
     @staticmethod
     def create_request(
@@ -128,7 +196,7 @@ class RequestRepository:
             cursor.execute("""
                 INSERT INTO pending_requests 
                 (request_id, customer_id, old_name, new_name, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (request_id, customer_id, old_name, new_name, status, now, now))
             
             return {
@@ -145,17 +213,13 @@ class RequestRepository:
     def get_request(request_id: str) -> Optional[Dict[str, Any]]:
         with get_db() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM pending_requests WHERE request_id = ?
-            """, (request_id,))
+            cursor.execute("SELECT * FROM pending_requests WHERE request_id = %s", (request_id,))
             row = cursor.fetchone()
             
             if row:
-                return dict(row)
+                return _row_to_dict(row)
         return None
     
-    # Get requests filtered by status (e.g., get all pending human review)
-    # If no status provided, returns all requests ordered by creation time
     @staticmethod
     def get_pending_requests(status: Optional[str] = None) -> List[Dict[str, Any]]:
         with get_db() as conn:
@@ -164,21 +228,15 @@ class RequestRepository:
             if status:
                 cursor.execute("""
                     SELECT * FROM pending_requests 
-                    WHERE status = ?
+                    WHERE status = %s
                     ORDER BY created_at DESC
                 """, (status,))
             else:
-                cursor.execute("""
-                    SELECT * FROM pending_requests 
-                    ORDER BY created_at DESC
-                """)
+                cursor.execute("SELECT * FROM pending_requests ORDER BY created_at DESC")
             
             rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            return [_row_to_dict(row) for row in rows]
     
-    # Dynamic UPDATE - only updates fields that are provided (not None)
-    # Builds SET clause dynamically based on which fields need updating
-    # Always updates updated_at timestamp
     @staticmethod
     def update_request(
         request_id: str,
@@ -196,38 +254,38 @@ class RequestRepository:
         now = utcnow()
         
         if extracted_data is not None:
-            updates.append("extracted_data = ?")
+            updates.append("extracted_data = %s")
             params.append(json.dumps(extracted_data))
         
         if confidence_score is not None:
-            updates.append("confidence_score = ?")
+            updates.append("confidence_score = %s")
             params.append(json.dumps(confidence_score))
         
         if ai_summary is not None:
-            updates.append("ai_summary = ?")
+            updates.append("ai_summary = %s")
             params.append(ai_summary)
         
         if ai_recommendation is not None:
-            updates.append("ai_recommendation = ?")
+            updates.append("ai_recommendation = %s")
             params.append(ai_recommendation)
         
         if status is not None:
-            updates.append("status = ?")
+            updates.append("status = %s")
             params.append(status)
         
         if checker_decision is not None:
-            updates.append("checker_decision = ?")
+            updates.append("checker_decision = %s")
             params.append(checker_decision)
         
         if checker_id is not None:
-            updates.append("checker_id = ?")
+            updates.append("checker_id = %s")
             params.append(checker_id)
         
         if rejection_reason is not None:
-            updates.append("rejection_reason = ?")
+            updates.append("rejection_reason = %s")
             params.append(rejection_reason)
         
-        updates.append("updated_at = ?")
+        updates.append("updated_at = %s")
         params.append(now)
         params.append(request_id)
         
@@ -236,14 +294,13 @@ class RequestRepository:
             cursor.execute(f"""
                 UPDATE pending_requests 
                 SET {', '.join(updates)}
-                WHERE request_id = ?
+                WHERE request_id = %s
             """, params)
             
             if cursor.rowcount > 0:
                 return RequestRepository.get_request(request_id)
         return None
     
-    # Record an RPS (banking system) update for audit purposes
     @staticmethod
     def add_rps_update(request_id: str, rps_reference: str, updated_fields: Dict[str, Any], status: str) -> int:
         now = utcnow()
@@ -251,24 +308,20 @@ class RequestRepository:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO rps_updates (request_id, rps_reference, updated_fields, status, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             """, (request_id, rps_reference, json.dumps(updated_fields), status, now))
-            return cursor.lastrowid if cursor.lastrowid is not None else 0
+            return cursor.lastrowid if cursor.lastrowid else 0
     
-    # Get RPS updates - optionally filtered by request_id
     @staticmethod
     def get_rps_updates(request_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with get_db() as conn:
             cursor = conn.cursor()
             if request_id:
-                cursor.execute("""
-                    SELECT * FROM rps_updates WHERE request_id = ? ORDER BY created_at DESC
-                """, (request_id,))
+                cursor.execute("SELECT * FROM rps_updates WHERE request_id = %s ORDER BY created_at DESC", (request_id,))
             else:
                 cursor.execute("SELECT * FROM rps_updates ORDER BY created_at DESC")
-            return [dict(row) for row in cursor.fetchall()]
+            return [_row_to_dict(row) for row in cursor.fetchall()]
     
-    # Get all RPS updates for a specific customer (via JOIN with pending_requests)
     @staticmethod
     def get_customer_rps_history(customer_id: str) -> List[Dict[str, Any]]:
         with get_db() as conn:
@@ -276,13 +329,12 @@ class RequestRepository:
             cursor.execute("""
                 SELECT r.* FROM rps_updates r
                 JOIN pending_requests p ON r.request_id = p.request_id
-                WHERE p.customer_id = ?
+                WHERE p.customer_id = %s
                 ORDER BY r.created_at DESC
             """, (customer_id,))
-            return [dict(row) for row in cursor.fetchall()]
+            return [_row_to_dict(row) for row in cursor.fetchall()]
 
 
-# Repository class for audit_logs table operations
 class AuditRepository:
     @staticmethod
     def log_event(request_id: str, event_type: str, event_data: Dict[str, Any]) -> str:
@@ -294,25 +346,23 @@ class AuditRepository:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO audit_logs (log_id, request_id, event_type, event_data, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             """, (log_id, request_id, event_type, json.dumps(event_data), now))
         
         return log_id
     
-    # Get all audit logs for a request, ordered by timestamp (chronological)
     @staticmethod
     def get_logs(request_id: str) -> List[Dict[str, Any]]:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM audit_logs 
-                WHERE request_id = ?
+                WHERE request_id = %s
                 ORDER BY timestamp ASC
             """, (request_id,))
             
             rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            return [_row_to_dict(row) for row in rows]
 
 
-# Initialize database on module import (creates tables if needed)
 init_db()

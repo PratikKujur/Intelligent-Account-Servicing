@@ -1,0 +1,16 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "banking_service",
+            "database": "banking_service",
+            "username": "postgres",
+            "password": "Pratikkujur&7",
+            "connectionTimeout": 30
+        }
+    ]
+}
