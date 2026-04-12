@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any
+import json
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -79,6 +80,3 @@ class AuditService:
             "success": success,
             "rps_reference": rps_reference
         })
-
-
-import json
