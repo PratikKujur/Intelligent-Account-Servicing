@@ -46,11 +46,11 @@ venv\Scripts\activate
 source venv/bin/activate
 
 # Install dependencies
-pip install fastapi uvicorn langchain-groq langchain-core pydantic pypdf pytesseract python-dotenv Pillow
+pip install fastapi uvicorn langchain-groq langchain-core pydantic pypdf pytesseract python-dotenv Pillow psycopg2-binary
 
 # Configure environment variables
-# Create .env file with your GROQ API key:
-echo GROQ_API_KEY=your_api_key_here > .env
+# Create .env file with your API keys:
+# Copy .env.example and update with your values
 
 # Install Tesseract OCR (system dependency)
 # Ubuntu/Debian:
@@ -58,6 +58,29 @@ sudo apt-get install tesseract-ocr
 # macOS:
 brew install tesseract
 # Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+```
+
+### Database Setup
+
+The application supports **PostgreSQL** (recommended for production) and **SQLite** (for development/prototype).
+
+**Using PostgreSQL:**
+```bash
+# Create PostgreSQL database
+psql -U postgres -c "CREATE DATABASE banking_service;"
+
+# Set DATABASE_URL in .env
+DATABASE_URL=postgresql://user:password@localhost:5432/banking_service
+```
+
+**Using SQLite (default - no setup needed):**
+```bash
+# DATABASE_URL not set = SQLite automatically
+# Database file: data/banking_system.db
+```
+
+**Important:** If your password contains special characters (`&`, `@`, `#`, etc.), URL-encode them:
+- `P@ssw0rd&123` → `P%40ssw0rd%26123`
 ```
 
 ### Frontend Setup
@@ -119,12 +142,13 @@ npm run dev
                             │   Agent     │
                             └──────┬──────┘
                                    │
-                    ┌──────────────┴──────────────┐
-                    │                             │
-              ┌─────▼─────┐                 ┌──────▼──────┐
-              │  SQLite   │                 │  Audit Log  │
-              │   DB      │                 │   Service   │
-              └───────────┘                 └─────────────┘
+                     ┌──────────────┴──────────────┐
+                     │                             │
+               ┌─────▼─────┐                 ┌──────▼──────┐
+               │ PostgreSQL │                 │  Audit Log  │
+               │   (SQLite │                 │   Service   │
+               │  fallback)│                 └─────────────┘
+               └───────────┘
                                    │
                     ┌──────────────┴──────────────┐
                     │     RPS Mock Service         │
@@ -260,7 +284,9 @@ def _enforce_authorization(self, checker_id: Optional[str]) -> bool:
 | **pytesseract** | OCR engine | Open-source OCR for text extraction from images |
 | **Pillow** | Image processing | Python Imaging Library for handling document images |
 | **python-dotenv** | Environment config | Load environment variables from .env files |
-| **sqlite3** | Database | Zero-configuration, file-based, sufficient for prototype |
+| **PostgreSQL** | Database (primary) | Production-ready, concurrent connections, ACID compliance |
+| **SQLite** | Database (fallback) | Zero-configuration, file-based, for development/prototype |
+| **psycopg2** | PostgreSQL adapter | Python driver for PostgreSQL database |
 
 ### Frontend Technologies
 
@@ -327,7 +353,7 @@ Intelligent-Account-Servicing/
 │   ├── api/
 │   │   └── routes.py                 # FastAPI endpoints
 │   ├── services/
-│   │   ├── database.py               # SQLite repositories
+│   │   ├── database.py               # PostgreSQL/SQLite repositories
 │   │   ├── ai_pipeline.py            # Pipeline orchestrator
 │   │   ├── audit.py                  # Audit logging
 │   │   └── rps_mock.py               # RPS mock (HITL boundary)
@@ -348,9 +374,9 @@ Intelligent-Account-Servicing/
 │   ├── vite.config.ts
 │   └── package.json
 ├── data/
-│   ├── logs/                         # Audit logs
+│   ├── logs/                         # Audit logs (JSON files)
 │   ├── uploads/                      # Uploaded documents
-│   └── banking_system.db             # SQLite database
+│   └── banking_system.db             # SQLite database (if using SQLite)
 ├── pyproject.toml
 ├── requirements.txt
 └── .env
