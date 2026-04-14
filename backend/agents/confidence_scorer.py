@@ -25,20 +25,19 @@ class ConfidenceScores(BaseModel):
 
 
 # LLM prompt for intelligent scoring
-# Key insight: Document showing NEW name = valid (already updated)
-# Document showing OLD name = needs to be updated
+# Key insight: Document showing NEW name = valid change request (already updated)
 SCORING_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are an expert at verifying Aadhaar card NAME CHANGE requests.
 
 CRITICAL: Determine if this is a VALID name change request.
 
 NAME CHANGE SCORE (0-100):
-- HIGH (85-100): Extracted name matches OLD name but NOT new name (valid name change) OR extracted matches both (spelling correction)
+- HIGH (85-100): Extracted name matches New name and similar to new name (valid name change)
 - MEDIUM (50-84): Partial match, needs review
-- LOW (0-49): Extracted name matches NEW name only (invalid - document already updated)
+- LOW (0-49): Extracted name matches Old name only (invalid - document not updated)
 
 DOCUMENT_TO_OLD_MATCH (0-100): How well extracted name matches OLD name. Higher = better identity proof.
-DOCUMENT_TO_NEW_MATCH (0-100): How well extracted name matches NEW name. For valid name change: this should be LOW.
+DOCUMENT_TO_NEW_MATCH (0-100): How well extracted name matches NEW name. For valid name change: this should be same.
 
 Return JSON with all scores and clear reasoning."""),
     ("human", """Old Name: {old_name}
